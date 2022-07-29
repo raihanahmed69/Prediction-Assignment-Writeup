@@ -1,229 +1,139 @@
 ---
-title: 'Assignment: Prediction Assignment Writeup'
+title: "Practical Machine Learning Course Project"
 author: "Raihan Ahmed"
-date: "July 29, 2022"
-output: html_document
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
 ---
+# Project Overview
+Personal fitness trackers are commonly used to track individual fitness data. 
+Users can quantify how much of a particular movement they make, but not how
+well they did the movement. This analysis will use accelerometer data from six 
+participants. Accelerometers were worn on the belt, forearm, arm or on a dumbell. 
+Participants were instructed to perform dumbell bicep curls (10 reps)
+incorrectly and correctly, in five different ways. I will use the data to predict
+the manner in which they did the exercise.
 
-##1.Synopsis:
-###Question:
-The goal of your project is to predict the manner in which the subjects in this study did the exercise. This is the "classe" variable in the training set. The other varaibles were used to predict the outcome "classe" of the provided test data.
-
-###Data:
-The training data for this project were downloaded from : https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
-The test data  were downloaded from:
-https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
-
-###Features: 
-The training data contain 19622 observations with 160 features. Removal of unnecessary features and near zero variables led to the reduction of the features from 160 to 44. The training data were divided into  Train_validation, Train_Train and Train_Test datasets for builiding and validation of the prediction modelling. 
-
-###Algorithm:
-Among the 6 different prediction models were evaluated, the prediction modelling with random forest with ANOVA provided the highest accuracy (99.41%) of all the tested models. 
-
-### Evaluation: 
-This predictive modelling with random forest gave an accuracy rate of 99.337% on testing the validation dataset. The expected error rate is 0.66%. Further, the test data downloaded from the website were evalualted with this random forest predictive algorithm based on ANOVA. 
-
-
-##2.Customizing Startup
-###Remove any pre-existing variables/objects
-```{r}
-rm(list = ls(all = TRUE))
+# Data Preparation
+Load necessary packages
+```{r, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results=FALSE}
+library(lattice)
+library(ggplot2)
+library(caret)
+library(kernlab)
+library(rattle)
+library(reshape2)
+library(corrplot)
+library(ggcorrplot)
+library(randomForest)
+library(rpart)
+set.seed(3232)
 ```
 
-###Temporarily turn off warnings
+load the test and training data
 ```{r}
-oldw <- getOption("warn")
-options(warn = -1)
+trainData <- read.csv("./pml-training.csv")
+testData <- read.csv("./pml-testing.csv")
+dim(trainData)
+dim(testData)
 ```
 
-###clear the console
-```{r}
-cat("\014") 
+Data cleaning - Here, variables with nearly zero variance or that are almost always NA,
+and the columns containing summary statistics or irrelevant data will be removed. 
+``` {r}
+trainClean <- trainData[,colMeans(is.na(trainData))< .9] 
+trainClean <- trainClean[,-c(1:7)] 
+nvz <- nearZeroVar(trainClean)
+trainClean <- trainClean[,-nvz]
+dim(trainClean)
+```
+```{r, echo=FALSE, results='hide'}
+corMat <- cor(trainClean[sapply(trainClean, is.numeric)])
+melt <- melt(corMat, as.is=TRUE)
 ```
 
-###Install and Load the requisite libaries 
+Performed correlation matrix, see appendix, fig 1.
+The correlation matrix shows there are variables that are correlated, which must be removed
 ```{r}
-Lib_to_used<-c("datasets", "data.table","rpart","randomForest", "nnet", "dplyr", "kernlab","RRF", "caret", "rattle", "ggplot2", "lattice")# enter the pre-requsite libraries
-Load_Lib <- function(lib) {
-        if (!lib %in% installed.packages()) {
-                print(paste("installing",lib)) 
-                install.packages(lib) 
-        }
-}
-a=0
-b= length(Lib_to_used)
-for (i in Lib_to_used) {
-        Load_Lib(i)
-        library(i, character.only = TRUE)
-        a = a+1
-        print (paste0(a, " of ", b, " required libraries have been loaded:", " [library:", i, "]"))
-}
+c <- findCorrelation(corMat, cutoff = .90)
+trainClean <- trainClean[,-c]
 ```
 
-###Automatically install the requistite libraries if not previously installed from the CRAN mirror
-```{r}
-r <- getOption("repos")
-r["CRAN"] <- "http://cran.us.r-project.org"
-options(repos = r)
-rm(r)
-```
-###Remove any pre-existing variables/objects
-```{r}
-rm(list = ls(all = TRUE))
-```
-##3.Data Processing:
-###3.1 Create a folder in the desktop for this assignment
-```{r}
-setwd("~/Desktop")
-if (!dir.exists("Practical_Machine")){
-        dir.create("Practical_Machine")
-}
+Split the data into training (70%) and validation (30%)
+``` {r}
+inTrain <- createDataPartition(y=trainClean$classe, p=0.7, list=FALSE)
+train <- trainClean[inTrain,]
+valid <- trainClean[-inTrain,]
+# Create a control for 3 fold validation
+control <- trainControl(method="cv", number=3, verboseIter = FALSE)
 ```
 
-###3.2 Download and unzip the data to the local desktop folder called "Data.zip"
+# Building the models
+## Random Forests
 ```{r}
-setwd("~/Desktop/Practical_Machine")
-if (!file.exists("Train.csv")){
-        DataURL<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
-        download.file(DataURL, destfile = "Train.csv", method="curl")
-        
-}
-if (!file.exists("Test.csv")){
-        DataURL<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
-        download.file(DataURL, destfile = "Test.csv", method="curl")
-        
-}
+# Fit the model on train using random forest
+train$classe <- factor(train$classe)
+RFfit <- randomForest(classe~., data=train, method="class", trControl = control, tuneLength = 5)
+RFfit
+RFpred<- predict(RFfit, valid) # predict on the valid data set.
+cmRF <- confusionMatrix(RFpred, as.factor(valid$classe))
+cmRF
+table(RFpred, valid$classe)
 ```
-###3.3 .Load the data
+The estimated accuracy is 0.9937, and oos error is 0.0063
+
+## Decision Tree
 ```{r}
-setwd("~/Desktop/Practical_Machine")
-data <-fread ("Train.csv",header = TRUE, na.strings = c("NA", "#DIV/0!", ""))
-dim(data)
-Test <-fread ("Test.csv",header = TRUE, na.strings = c("NA", "#DIV/0!", ""))
-dim(Test)
+
+DTfit <- train(classe~., data=train, method='rpart', trControl=control, tuneLength=5) 
+DTfit
+DTpred <- predict(DTfit, valid)
+cmDT <- confusionMatrix(DTpred, factor(valid$classe))
+cmDT
+table(DTpred, valid$classe)
+```
+The estimated accuracy is 0.5869, and oos error is 0.4131
+The decision tree figure is available in the appendix, fig2.
+
+## Support Vector Machine
+```{r}
+SVMfit <- train(classe~., data=train, method="svmLinear", trControl = control, tuneLength = 5, verbose = FALSE)
+SVMfit
+SVMpred <- predict(SVMfit, valid)
+SVMcm <- confusionMatrix(SVMpred, factor(valid$classe))
+SVMcm
+table(SVMpred,valid$classe)
+```
+The estimated accuracy is 0.7499, and oos error is 0.2501
+
+## Selecting the most accurate method to use on the test set.
+Random forests method was 99.37% accurate. Decision trees method was 58.69% accurate, and Support Vector Machine method was 74.99% accurate. In this case the data indicates that the most accurate model for predicting our test set is Random Forest
+
+## Predicting the test data set
+```{r}
+TestPred <- predict(RFfit, testData)
+TestPred
 ```
 
-### 3.4 Clean the data:
-
-Remove variables with missing values
+#Appendix
+fig. 1 correlation matrix
 ```{r}
-isna<-colSums(is.na(data)) == 0
-data1<-subset(data, select = isna)
-dim(data1)
+corMat <- cor(trainClean[sapply(trainClean, is.numeric)])
+melt <- melt(corMat, as.is=TRUE)
+View(melt)
+corPlot <- ggplot(data=melt, aes(x=Var1, y=Var2, fill=value)) +
+        geom_tile(color="white") +
+        scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+         theme(axis.text.x = element_text(angle = 90, vjust = 1, 
+    size = 6, hjust = 1), axis.text.y=element_text(size=6))+
+ coord_fixed()
+corPlot
 ```
-Convert classe "character" variable into "factor" variable for downstream analyses:
+fig. 2 decision tree
 ```{r}
-data1$classe<-as.factor(data1$classe)
-```
-
-Delete all columns with "characters" except the column that is to be predicted from the analysis if it is a "character" class:
-```{r}
-indx <- which(unlist(summarise_each(data1, funs(class))!='character'))
-data2<-subset(data1, select= indx)
-dim(data2)
-```
-
-Remove unnessary columns
-```{r}
-data3<-subset(data2, select = -c(raw_timestamp_part_1, raw_timestamp_part_2,num_window ))
-dim(data3)
-```
-
-Remove zero covariates
-```{r}
-nsv <- nearZeroVar(data3,saveMetrics=TRUE)
-non_zero<-nsv$percentUnique>1
-non_zero_columns_classe<-c(rownames(nsv[non_zero,]), "classe")
-data4<-as.data.frame(subset(data3, select= non_zero_columns_classe))
-dim(data4)
-```
-
-###3.5 Train Data spliting:
-The train dataset was splited into validation, training and test datasets to optimise and validate the prediction algorithm.
-```{r}
-set.seed(7777)
-Main <- createDataPartition(y=data4$classe, p=0.8, list=FALSE)
-Train_validation <- data4[-Main,]; subData <- data4[Main,]
-group<- createDataPartition(y=subData$classe, p=0.8, list=FALSE)
-Train_Train <- subData[group,]; Train_Test <- subData[-group,]
-dim(Train_validation)
-dim(Train_Train)
-dim(Train_Test)
-```
-
-
-###3.6  Modelling and Predictions with the Training dataset
-Create an empty table for later summary of the prediction accuracy:
-```{r}
-results = data.frame("name" = character(), "Accuracy" = numeric())
-results_f = data.frame("name" = character(), "Accuracy" = numeric())
-rownames(results)<- NULL
-rownames(results_f)<-NULL
-```
-Used the following Prediction Models:
-1. Model_rpart     :Recursive Partitioning and Regression Trees
-2. Model_rf        :Random Forest
-3. Model_rf_ANOVA  :Random Forest based on ANOVA
-4. Model_nnet      :Fit Neural Networks
-5. Model_lssvm     :Least Squares Support Vector Machine
-6. Model_RRF       :Regularized Random Forest
-
-```{r}
-set.seed(7777)
-Model_rpart<- rpart(classe ~ ., method= "class", data=Train_Train)
-Prediction<- predict(Model_rpart,newdata=Train_Test, type = "class")
-rp<-confusionMatrix(Prediction, Train_Test$classe)$overall[1]
-results<-data.frame("name"= "Model_rpart", "Accuracy"= rp)
-results_f<- rbind(results_f,results)
-Model_rf<- randomForest(classe~., data = Train_Train, method = "class")
-Prediction<- predict(Model_rf,newdata=Train_Test, type = "class")
-rf<-confusionMatrix(Prediction, Train_Test$classe)$overall[1]
-results<-data.frame("name"= "Model_rf", "Accuracy"= rf)
-results_f<- rbind(results_f,results)
-Model_rf_ANOVA<- randomForest(classe~., data = Train_Train, method = "ANOVA")
-Prediction<- predict(Model_rf_ANOVA,newdata=Train_Test, type = "class")
-rf_A<-confusionMatrix(Prediction, Train_Test$classe)$overall[1]
-results<-data.frame("name"= "Model_rf_ANOVA", "Accuracy"= rf_A)
-results_f<- rbind(results_f,results)
-Model_nnet<- nnet(classe~., data = Train_Train , size = 3)
-Prediction<- predict(Model_nnet,newdata=Train_Test, type = "class")
-nn<-confusionMatrix(Prediction, Train_Test$classe)$overall[1]
-results<-data.frame("name"= "Model_nnet", "Accuracy"= nn)
-results_f<- rbind(results_f,results)
-Model_lssvm<- lssvm(classe~., data = Train_Train)
-Prediction<- predict(Model_lssvm,newdata=Train_Test)
-ll<-confusionMatrix(Prediction, Train_Test$classe)$overall[1]
-results<-data.frame("name"= "Model_lssvm", "Accuracy"= ll)
-results_f<- rbind(results_f,results)
-Model_RRF<- RRF(classe~., data = Train_Train)
-Prediction<- predict(Model_RRF,newdata=Train_Test)
-RR<-confusionMatrix(Prediction, Train_Test$classe)$overall[1]
-results<-data.frame("name"= "Model_RRF", "Accuracy"= RR)
-results_f<- rbind(results_f,results)
-```
-###3.7 Summary of evaluations of the Prediction Algorithms with Train_Test data Set
-```{r}
-rownames(results_f)<-NULL
-arrange(results_f, -Accuracy)
-```
-
-###3.8  Evaluation of the Prediction Algorithms with Train_Validation Data Set
-It is clear that the random forest based on ANOVA gives the best accuracy of the all the tested models. So, this model will be used for the further  validation and to predict the test data outcome. 
-```{r}
-Prediction<- predict(Model_rf_ANOVA,newdata=Train_validation, type = "class")
-confusionMatrix(Prediction, Train_validation$classe)$overall[1]
-```
-So, the accuracy is estimated to be around 99.41%.
-
-##4.Prediction of the Actual Test Data Set
-###4.1 Preprocessing of the Test Data to have the same columns as that of the Train data set for prediction analysis:
-```{r}
-cl_name<-colnames(subset(Train_Train, select = -c(classe)))
-Test_data<-subset(Test, select = cl_name)
-dim(Test_data)
-```
-## 4.2. Prediction of the Test Data
-```{r}
-Model_rf_ANOVA<- randomForest(classe~., data = Train_Train, method = "ANOVA")
-predict(Model_rf_ANOVA,newdata=Test_data, type = "class")
+fancyRpartPlot(DTfit$finalModel)
 ```
